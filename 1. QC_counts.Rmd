@@ -21,7 +21,7 @@ library(readr)
 library(edgeR)
 library(biomaRt)  
 library(knitr)  
-
+source("functions.R")
 
 counts = read_tsv("counts.tsv")  #  a matrix with genes as rows and 1 column with gene id, 1 column with gene name, and 24 columns for samples (stages per donor)
 
@@ -42,24 +42,7 @@ rownames(counts) = counts[,"GeneID"] # gene ID column becomes the row names
 counts = counts[,c(-1:-2)] # eliminate the gene ID and gene name columns, leaving only the counts per donor and stage
 rownames(counts) <- gsub("(ENSG[0-9]+).*", "\\1", rownames(counts)) # cut everything after the dot in the gene IDs of the row names
 
-
-# function to order the columns as I have set above in donors and stages
-orderStages = function(counts,stage. = stage){
-  nc = counts[ , grepl("iPSC", names(counts))]  #takes columns whose name matches x
-  
-  #Do the same for the other stages
-  
-  for (s in stage.[-1])  {         
-    
-    i = counts[ , grepl(s , names(counts))]
-    nc = cbind(nc,i)
-  }
-  
-  return(nc)
-}
-
-
-counts = orderStages(counts)
+counts = orderColsByStages(counts)
 colnames(counts) = paste(rep(stage,each = 3), rep(donors,8),sep = "_" ) # change the format of the column names
 
 kable(counts[1:2,1:6]) # check first few lines
