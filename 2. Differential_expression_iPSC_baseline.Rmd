@@ -249,3 +249,4 @@ for (i in names(DE_sig_stage)) {
 }
   
 ```
+The saved csv files per stage were placed together in the same excel book and formatted to create ESM table 5.

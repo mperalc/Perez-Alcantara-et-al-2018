@@ -27,7 +27,7 @@ counts = read_tsv("counts.tsv")  #  a matrix with genes as rows and 1 column wit
 
 donors = c("Ad2.1","Ad3.1","Neo1.1")  # names of the donors (replicates)
 
-stage = c("iPSC", "DE", "PGT", "PFG", "PE", "EP","ENstage6", "ENstage7") # names of the stages
+stage = c("iPSC", "DE", "PGT", "PFG", "PE", "EP","ENstage6", "ENstage7") # names of the stages (in the paper, in the same order: iPSC, DE, GT, PF, PE, EP, EN, BLC)
 
 
 ```
@@ -230,4 +230,4 @@ We can then save the dge object of the count table:
 save(dge_counts, file = "dge_counts.xz" , compress="xz")
 ```
 
-
+This table of raw counts is ESM Table 4 (after some formatting).
