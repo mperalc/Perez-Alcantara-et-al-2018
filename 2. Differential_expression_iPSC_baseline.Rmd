@@ -1,0 +1,251 @@
+---
+title: "2. Differential expression per stage vs iPSC baseline"
+author: "Marta Perez Alcantara"
+date: "13 de septiembre de 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+In this document I will perform a differential expression analysis comparing each stage to the iPSC baseline. At the end I will have each gene assigned to the stage where it shows its (significant, log2FC > 1 and q < 0.01) highest expression compared to the iPSC stage. 
+
+Load the dge object that contains the counts:
+
+```{r load,echo=TRUE, message=FALSE}
+
+currentDate <- Sys.Date() # to save date in name of output files
+
+library(pheatmap)
+library(RColorBrewer)
+library(org.Hs.eg.db)
+library(limma)
+library(ggbiplot)
+library(ggrepel) # provides geoms for ggplot2 to repel overlapping text labels.
+library(ggplot2)
+library(ggfortify)
+library(reshape2)  # to modify dataframes for ggplot2
+library(knitr)   #for tables in rmd
+library(pander)  #more tables
+library(readr) # fast reading of large files
+source("functions.R")
+
+##### load dge object  
+
+load(file = "/Users/Marta/Documents/WTCHG/DPhil/Data/Diff_v2/session_objects/dge_cc.xz",verbose = TRUE)  #loading the dge object for conservative counts
+
+donors = c("Ad2.1","Ad3.1","Neo1.1")  # data comes from three donors
+stage = c("iPSC", "DE", "PGT", "PFG", "PE", "EP","ENstage6", "ENstage7") # 8 stages
+
+#Renaming stages and samples for plotting
+Stages = c("iPSC", "DE", "GT", "PF", "PE", "EP","EN", "BLC") 
+#Samples= c("Sample 1","Sample 2","Sample 3")
+Samples <- c("Ad2.1","Ad3.1","Neo1.1")
+
+# order by samples, to make the design matrix clearer:
+dge_cc$counts = orderColsByDonors(dge_cc$counts)
+
+#same with sample matrix from dge:
+dge_cc$samples = orderRowsByDonors(dge_cc$samples)
+
+```
+
+Our DGE object for the counts table has `r nrow(dge_cc$counts)` genes. First I calculate the normalization factors using TMM:
+
+
+```{r normalization factors,echo=TRUE}
+
+dge_cc <- calcNormFactors(dge_cc)    # TMM by default, RLE or UQ also possible
+
+
+```
+
+Now I'll create the design matrix:
+
+```{r design matrix, echo=TRUE}
+ 
+samples <- c(rep(c("Ad2.1","Ad3.1","Neo1.1"),each = 8))   
+samples = as.factor(samples)
+stages <- as.factor(c(rep(1:8,3)))
+design1 <- model.matrix(~stages + samples)                    
+kable(design1)
+# Now it looks like a normal design matrix, ready to create the contrast matrix
+```
+
+This is the design matrix. The number of rows needs to be the same than the number of columns in the count matrix. The base in the design matrix is sample 1 for the samples, and iPSC for the stages (they don't appear on the design matrix because it already has all the information about all the samples and stages: we can infer that stage 1 applies to the 1st column of the count matrix etc.). 
+ 
+For the linear model, I'll do a voom transformation. It uses the experiment design matrix, and produces an EList object using normalised data to convert the read counts to log2-cpm, with associated weights, ready for linear modelling. The limma-voom method assumes that rows with zero or very low counts have been removed. For design matrix with iPSC only:
+
+
+
+```{r voom normalization, echo=TRUE}
+v2 = voom(dge_cc,design = design1,plot = TRUE)   
+# This converts the counts to log2-counts per million with associated precision weights. After this, the RNA-seq data can be analyzed as if it was microarray data.
+```
+The plot shows the mean-variance trend. Genes with larger counts have smaller variance as a result of the log2 transformation. The spread of points reflects the biological variation between stages and donors. For a comparison of this plot in different datasets, see the paper by Law et al., Genome Biology (2014) https://doi.org/10.1186/gb-2014-15-2-r29. 
+
+The voom transformation estimates the mean-variance trend and uses it to predict the variance of each log-cpm value (per stage and sample, instead than at the gene level). This variance is reflected as a weight for each log2-cpm value. log2-cpm values themselves are in the "E" matrix. 
+
+```{r plots, echo=TRUE}
+par(mfrow = c(1,2))
+plot(log2(dge_cc$counts + 1)[,1:2],
+     pch = 16, cex = 0.3, main = "log2")
+plot(v2$E[,1:2],
+     pch = 16, cex = 0.3, main = " voom norm counts")
+
+# For 50 genes, see the distribution of counts:
+random_sample = sample(nrow(dge_cc),50)
+par(mfrow = c(1,3))
+plot(density(as.numeric(unlist(dge_cc$counts[random_sample,]))), main = "counts", cex.main = 2)
+plot(density(as.numeric(unlist(log2(dge_cc$counts + 1)[random_sample,]))), main = "log2", cex.main = 2)
+plot(density(as.numeric(unlist(v2$E[random_sample,]))), main = "voom norm counts", cex.main = 2)
+
+```
+
+
+A comparison of normal log2 transformation and voom's transformation with log2-cpm. I have plotted the untransformed and the log2 transformed counts for a random sample of 50 genes across the 24 samples. Most genes have ~1000 raw counts (log2=10). The count data follows a skewed distribution with a large dynamic range and a large tail of “extreme values” to the right of the distribution. The voom transformed values have negative values, compared to the log2 transformed ones, because it transforms to log2 of cpm: some counts after becoming cpms will acquire values between 0 and 1, and therefore negative log2 values. 
+
+Before fitting the linear model, I'll perform multi-dimensional scaling:  plot samples on a two-dimensional scatterplot so that distances on the plot approximate the typical log2 fold changes between the samples (MDS).
+
+
+```{r mds, echo=TRUE, fig.width=7, fig.height=7}
+mds_plots = pretty_mds(v2)
+plot(mds_plots[[1]])
+plot(mds_plots[[2]])
+
+```
+
+The distance between each pair of samples is the root-mean-square deviation (Euclidean distance) for the top genes. Distances on the plot can be interpreted as leading log2-fold-change, meaning the typical (root-mean-square) log2-fold-change between the samples for the genes that distinguish those samples. If gene.selection is "common", then the top genes are those with the largest standard deviations between samples. If gene.selection is "pairwise", then a different set of top genes is selected for each pair of samples. The pairwise feature selection may be appropriate for microarray data when different molecular pathways are relevant for distinguishing different pairs of samples. 
+
+In this case, we see for the "pairwise" method that last two stages cluster by stage (6 or 7) and not by sample. In the "common" method, the opposite happens. Nothing else changes much between the two plots. My interpretation is that the genes that drive the variance between all stages, that are used in the common method, are not the ones that distinguish the late EN stages. There is in reality for EN a much higher similarity in the whole transcriptome between samples than between stages, and therefore the stages need to be separated by different genes (as shown in the pairwise method). Plotting the two versions shows us interesting information about the data. The "pairwise" method also shows that samples Ad2.1 and Neo1.1 are closer in EN stage 7 than sample Ad3.1. We saw from the longitudinal TPM plots of selected marker genes, from FACS and from the insulin secretion data (not shown in the paper) that sample Ad3.1 is better differentiated.
+
+Plot of the sample distance cluster:
+
+```{r sdc, echo=TRUE, fig.width=7, fig.height=7}
+sdc_voom = plot_sdc(v2$E) 
+
+```
+
+It also shows the clustering of two last stages by donor instead of stage.
+
+Principal component analysis:
+
+```{r pca, echo=TRUE, fig.width=7, fig.height=7}
+
+par(mfrow = c(1,1))
+stages <- rep(Stages,3) 
+
+p = plot_pca(v2$E)
+
+#ggsave(paste(currentDate,"_PCA_newsamples.jpg",sep = ""), p, width = 10, height = 8, units = "in", dpi = 600)
+
+```
+
+Estimating within sample and within stage correlation:
+
+```{r correlation, echo=TRUE}
+
+#create sample info table
+
+sample_info = as.data.frame(cbind(stages,samples))
+dupcor_sample <- duplicateCorrelation(v2,design1,block = sample_info$samples)
+dupcor_sample$consensus.correlation
+
+dupcor_stage <- duplicateCorrelation(v2,design1,block = sample_info$stages)
+dupcor_stage$consensus.correlation
+
+```
+
+
+The within sample correlation is `r round(dupcor_sample$consensus.correlation,2)`.
+The within stage correlation is `r round(dupcor_stage$consensus.correlation,2)`.
+As expected, correlation within each stage is much higher.
+
+To perform the differential expression analysis we need to fit the contrast matrix:
+
+
+```{r contrast matrix, echo=TRUE}
+contrast.matrix = rbind(0,diag(7),0,0)
+print(contrast.matrix)
+
+```
+It describes the comparisons that will be made between the elements of the deisgn matrix. The number of rows is equal to the number of columns of the design matrix, while the columns denote the comparisons. In this simple contrast, the "1" signal the factors that will be contrasted against the baseline of the design: iPSC stage. This will return 7 contrasts, one for each stage minus iPSC (thus the 7 columns). Rows 9 and 10 relate to the donors columns in the design matrix, and row 1 relates to the intercept: since we are not interested in contrasting those, all values are 0 for that row. If confused, check limma userguide for several examples of contrast matrices (the example on p.40 applies particularly to this case).  
+
+Now we can proceed with the differential expression analysis:
+
+
+```{r DE, echo=TRUE, fig.width=9, fig.height=9}
+############# differential expression for all stages ################
+
+fit = lmFit(v2,design1)
+fit2 = contrasts.fit(fit, contrast.matrix)
+fit2 = eBayes(fit2)
+alltable <- topTable(fit2, sort = "F", number = nrow(dge_cc$counts))
+
+
+
+write.csv(alltable,quote = F,row.names = F,file = "all_diff_expression_results.csv")
+
+#get max conditions per gene
+maxVals <- apply(alltable,1,function(x) which.max(x[5:11]))
+
+#find significant genes per stage
+#iPSC stage are all those where the max coefficient in all is < 0
+sig_iPSC_stage <- alltable[rowSums(alltable[,5:11] < 0) == 7 & alltable$adj.P.Val < 0.01,]
+sig_DE_stage <- alltable[rowSums(alltable[,5:11] < 0) < 7 & alltable$adj.P.Val < 0.01 & maxVals == 1,]
+sig_PGT_stage <- alltable[rowSums(alltable[,5:11] < 0) < 7 & alltable$adj.P.Val < 0.01 & maxVals == 2,]
+sig_PFG_stage <- alltable[rowSums(alltable[,5:11] < 0) < 7 & alltable$adj.P.Val < 0.01 & maxVals == 3,]
+sig_PE_stage <- alltable[rowSums(alltable[,5:11] < 0) < 7 & alltable$adj.P.Val < 0.01 & maxVals == 4,]
+sig_EP_stage <- alltable[rowSums(alltable[,5:11] < 0) < 7 & alltable$adj.P.Val < 0.01 & maxVals == 5,]
+sig_EN6_stage <- alltable[rowSums(alltable[,5:11] < 0) < 7 & alltable$adj.P.Val < 0.01 & maxVals == 6,]
+sig_EN7_stage <- alltable[rowSums(alltable[,5:11] < 0) < 7 & alltable$adj.P.Val < 0.01 & maxVals == 7,]
+
+
+# assign each gene to the stage where it gets the maximum log2FC.
+
+logFC_iPSC_stage = apply(sig_iPSC_stage[5:11],1,function(x) min(x))####### logFC for iPSC is abs[lowest value for all other stages]
+
+DE_sig_stage <- list()
+sig_iPSC_stage <- cbind(sig_iPSC_stage[c(1:4)],as.data.frame(abs(logFC_iPSC_stage)),sig_iPSC_stage[15])
+colnames(sig_iPSC_stage) = c(colnames(sig_iPSC_stage[c(1:4)]),"logFC","adj.P.Val")
+DE_sig_stage[["iPSC"]] <- sig_iPSC_stage
+
+sig_DE_stage <- sig_DE_stage[c(1:5,15)]
+colnames(sig_DE_stage) = c(colnames(sig_DE_stage[c(1:4)]),"logFC","adj.P.Val")
+DE_sig_stage[["DE"]] <- sig_DE_stage
+
+sig_PGT_stage <- sig_PGT_stage[c(1:4,6,15)]
+colnames(sig_PGT_stage) = c(colnames(sig_PGT_stage[c(1:4)]),"logFC","adj.P.Val")
+DE_sig_stage[["PGT"]] <- sig_PGT_stage
+
+sig_PFG_stage <- sig_PFG_stage[c(1:4,7,15)]
+colnames(sig_PFG_stage) = c(colnames(sig_PFG_stage[c(1:4)]),"logFC","adj.P.Val")
+DE_sig_stage[["PFG"]] <- sig_PFG_stage
+
+sig_PE_stage <- sig_PE_stage[c(1:4,8,15)]
+colnames(sig_PE_stage) = c(colnames(sig_PE_stage[c(1:4)]),"logFC","adj.P.Val")
+DE_sig_stage[["PE"]] <- sig_PE_stage
+
+sig_EP_stage <- sig_EP_stage[c(1:4,9,15)]
+colnames(sig_EP_stage) = c(colnames(sig_EP_stage[c(1:4)]),"logFC","adj.P.Val")
+DE_sig_stage[["EP"]] <- sig_EP_stage
+
+sig_EN6_stage <- sig_EN6_stage[c(1:4,10,15)]
+colnames(sig_EN6_stage) = c(colnames(sig_EN6_stage[c(1:4)]),"logFC","adj.P.Val")
+DE_sig_stage[["EN6"]] <- sig_EN6_stage
+
+sig_EN7_stage <- sig_EN7_stage[c(1:4,11,15)]
+colnames(sig_EN7_stage) = c(colnames(sig_EN7_stage[c(1:4)]),"logFC","adj.P.Val")
+DE_sig_stage[["EN7"]] <- sig_EN7_stage
+
+  
+# select genes with logFC>1 and save
+
+for (i in names(DE_sig_stage)) {
+  
+  DE_sig_stage[[i]] = DE_sig_stage[[i]][which(DE_sig_stage[[i]][[5]] > 1),]
+  write.csv(DE_sig_stage[[i]],quote = F,row.names = F,file = paste(currentDate,"_sig_",i,"_diff_expression_maxvals_logFC1.csv",sep = ""))
+}
+  
+```
