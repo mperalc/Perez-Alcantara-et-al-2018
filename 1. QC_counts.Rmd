@@ -1,0 +1,250 @@
+---
+title: "1. QC and filtering of counts"
+output:
+  html_document: default
+  html_notebook: default
+---
+
+
+After the sequencing of RNA, reads were mapped to human genome build hg19, with GENCODE v19 (https://www.gencodegenes.org/releases/19.html) as the transcriptome reference, using STAR v.2.5, followed by gene-level quantification with featureCounts from the Subread package v.1.5. 
+
+This script performs the quality control and filtering of counts.
+
+```{r loading files, include=FALSE}
+# If libraries are not found, install them.
+packages <- c("readr", "edgeR", "biomaRt", "knitr")
+new.packages <- packages[!(packages %in% installed.packages()[,"Package"])]
+if (length(new.packages)) install.packages(new.packages)
+
+# Load necessary libraries
+library(readr)
+library(edgeR)
+library(biomaRt)  
+library(knitr)  
+
+
+counts = read_tsv("counts.tsv")  #  a matrix with genes as rows and 1 column with gene id, 1 column with gene name, and 24 columns for samples (stages per donor)
+
+donors = c("Ad2.1","Ad3.1","Neo1.1")  # names of the donors (replicates)
+
+stage = c("iPSC", "DE", "PGT", "PFG", "PE", "EP","ENstage6", "ENstage7") # names of the stages
+
+
+```
+Our gene counts matrix has genes as rows and 1 column with Ensembl gene id ("GeneID"), 1 column with gene name ("GeneName"), followed by 24 columns for samples (stages per donor in the format e.g. "Ad2.1DE"). We only need row names to identify the genes and the columns with the counts. 
+I eliminate superfluous columns, order the count matrix by stage and donor and remove the numbers after the "." in the Ensembl gene ID column:
+
+
+```{r count object, echo=TRUE}
+
+counts = as.data.frame(counts)
+rownames(counts) = counts[,"GeneID"] # gene ID column becomes the row names
+counts = counts[,c(-1:-2)] # eliminate the gene ID and gene name columns, leaving only the counts per donor and stage
+rownames(counts) <- gsub("(ENSG[0-9]+).*", "\\1", rownames(counts)) # cut everything after the dot in the gene IDs of the row names
+
+
+# function to order the columns as I have set above in donors and stages
+orderStages = function(counts,stage. = stage){
+  nc = counts[ , grepl("iPSC", names(counts))]  #takes columns whose name matches x
+  
+  #Do the same for the other stages
+  
+  for (s in stage.[-1])  {         
+    
+    i = counts[ , grepl(s , names(counts))]
+    nc = cbind(nc,i)
+  }
+  
+  return(nc)
+}
+
+
+counts = orderStages(counts)
+colnames(counts) = paste(rep(stage,each = 3), rep(donors,8),sep = "_" ) # change the format of the column names
+
+kable(counts[1:2,1:6]) # check first few lines
+```
+
+The initial count table contains `r nrow(counts)` genes. 
+
+Now I will keep in my count object just the genes that still exist in Ensembl, because a small sample disappear between builds. There are problems with genes that are still present in both datasets but change Ensembl gene IDs, so it is worth checking the data thoroughly:
+
+```{r ENSEMBL trimming, echo=TRUE}
+
+# use archived mart for Grch38 (v88, march 2017) to reproduce the gene count table of the paper
+ensembl38 = useMart(biomart = "ENSEMBL_MART_ENSEMBL", host = "mar2017.archive.ensembl.org", path = "/biomart/martservice" ,dataset = "hsapiens_gene_ensembl")
+
+all_ensembl_info_ensemblFound <- getBM(attributes = c('ensembl_gene_id', 'external_gene_name', 'gene_biotype', 'chromosome_name'),
+                                       filters = 'ensembl_gene_id', values = rownames(counts), mart = ensembl38)
+rownames(all_ensembl_info_ensemblFound) <- all_ensembl_info_ensemblFound$ensembl_gene_id
+
+
+diff = setdiff(rownames(counts),rownames(all_ensembl_info_ensemblFound)) # IDs lost (not found in GRCh38):
+length(diff)
+
+# mapping done with GRCH37. All info in GRCh37 of genes not found in GRCh38:
+
+ensembl37 = useMart(biomart = "ENSEMBL_MART_ENSEMBL", host = "grch37.ensembl.org", path = "/biomart/martservice" ,dataset = "hsapiens_gene_ensembl") 
+
+all_ensembl_info_ensemblNotFound <- getBM(attributes = c('ensembl_gene_id', 'external_gene_name', 'gene_biotype', 'chromosome_name'),
+                                          filters = 'ensembl_gene_id', values = diff, mart = ensembl37)   
+
+# check by gene names if they exist in grch38
+
+
+all_ensembl_info_ensemblNotFoundGRCh38 <- getBM(attributes = c('ensembl_gene_id', 'external_gene_name', 'gene_biotype', 'chromosome_name'),
+                                                filters = 'external_gene_name', values = all_ensembl_info_ensemblNotFound$external_gene_name, mart = ensembl38) 
+
+# there are duplicated ids in the resulting table. Check which ones are correct calling grch38 with ids
+all_ensembl_info_ensemblNotFoundGRCh38Ids = getBM(attributes = c('ensembl_gene_id', 'external_gene_name', 'gene_biotype', 'chromosome_name'),
+                                                  filters = 'ensembl_gene_id', values = all_ensembl_info_ensemblNotFoundGRCh38$ensembl_gene_id, mart = ensembl38) 
+
+# remove those not in autosomes, as we have duplicate ids from weird chromosome assemblies
+chr <- c(1:22)
+all_ensembl_info_ensemblNotFoundGRCh38Ids <- all_ensembl_info_ensemblNotFoundGRCh38Ids[which(all_ensembl_info_ensemblNotFoundGRCh38Ids$chromosome_name %in% chr),]
+
+
+keep1 = all_ensembl_info_ensemblFound #keep genes in counts whose Ensembl geneID still exists in current genome build. 
+
+# Take genes not found in GRCh38 by id, that still exist in GRCh38 with different id
+toChangeGeneNames = intersect(all_ensembl_info_ensemblNotFoundGRCh38Ids$external_gene_name, all_ensembl_info_ensemblNotFound$external_gene_name)
+
+old = all_ensembl_info_ensemblNotFound[which(all_ensembl_info_ensemblNotFound$external_gene_name %in% toChangeGeneNames),c(1:2)]
+colnames(old) = c("old_id","external_gene_name")
+anyDuplicated(old)  # check if there are duplicates (weird genes with lots of gene ids)
+old = old[which(!duplicated(old$external_gene_name)),]
+
+new = all_ensembl_info_ensemblNotFoundGRCh38Ids[which(all_ensembl_info_ensemblNotFoundGRCh38Ids$external_gene_name %in% toChangeGeneNames),]
+new = new[which(!duplicated(new$external_gene_name)),]
+
+keep2 = merge(old, new, by = "external_gene_name") # merge info of old and new ids
+rownames(keep2) = keep2$old_id
+
+#### modify IDs in counts of those that change id
+#### this is the ideal thing to do, but still gives problems of duplicated gene ids.
+
+# toModify = which(rownames(counts) %in%  keep2$old_id)  # select rows to change in counts
+# keep2=keep2[rownames(counts[toModify,]),]# same order as toModify
+#rownames(counts)[toModify] <- keep2[,"ensembl_gene_id"]  # several gene ids are duplicated, for some reason
+
+# number of genes I'd be interested in:
+nrow(keep2[which(keep2$gene_biotype == "protein_coding" | keep2$gene_biotype == "lincRNA"),])
+# this is around 1 % of my data, so I'll ignore those and, after checking the list, I keep those that I know to be important in the differentiation process or diabetes
+
+# change just HNF1B
+keep2 = keep2[which(keep2$external_gene_name == "HNF1B"),]
+rownames(counts)[which(rownames(counts) == keep2$old_id)] <- keep2$ensembl_gene_id # cange old id for new id
+rownames(keep2) = keep2$ensembl_gene_id  # change rowname to new id
+
+keep3 = rbind(keep1,keep2[c(1,3:5)])  # join
+
+dup = keep3[which(duplicated.data.frame(keep3)),] 
+# x duplicated elements. Remove them
+
+keep3 = keep3[which(!duplicated.data.frame(keep3)),]
+
+
+# merge info from found ids and genes not found that still exist with different iD in GRCh38
+counts = counts[rownames(keep3),]  
+
+all_ensembl_info_counts = keep3 # saved info for future reference
+
+rm(keep1,keep2,keep3,all_ensembl_info_ensemblFound,all_ensembl_info_ensemblNotFound,all_ensembl_info_ensemblNotFoundGRCh38,all_ensembl_info_ensemblNotFoundGRCh38Ids, ensembl37, ensembl38)
+```
+
+After this, the table of counts has `r nrow(counts)` genes. Now I want to keep in my count object genes with at least 1 cpm in at least one stage. That means I want to remove genes in which at least one stage has counts for ALL 3 samples:
+
+
+```{r cpm trimming, echo=TRUE}
+
+group <- rep(stage,each = 3)    #group by stages 
+anyNA(counts)  # remove NAs, if any are left at this point:
+counts = na.omit(counts)
+
+# create DGE object
+dge_counts <- DGEList(counts = counts,group = group,genes = all_ensembl_info_counts) 
+all_ensembl_info_counts = all_ensembl_info_counts[rownames(dge_counts$counts),] # re-sort rows
+
+# filter simply (remove genes with less that 3 columns with cpm<=1)
+keep_counts <- rowSums(cpm(dge_counts) > 1) >= 3   
+dge_counts <- dge_counts[keep_counts, , keep.lib.sizes = FALSE]   
+nrow(dge_counts)
+
+# notice how this has removed some genes, but some genes may have passed the filter above while having less than 1 cpm for some donors within the same stage.
+
+# go through the table 3 by 3
+# if there are more than 2 values in three columns above 0, go to next row.
+# if not, go to next 3
+# if gets to end of loop and not found the values, get that row. After loop, subset matrix excluding those rows
+
+trimByStage = function(dge){
+  data = dge$counts
+  data[data > 0] = 1 # convert to table where 0=0 and 1 equals any value above 0
+  
+  c = c() # initiate vector of numbers, to save rows to take out of matrix
+  
+  for (r in 1:nrow(data)) {
+    for (i in seq(1,24,3)) {   # loop through stages 3 by 3 (to jump over samples of same stage)
+      
+      if (sum(data[r,c(i,i + 1,i + 2)]) > 2) {
+        
+        break
+      }
+      if (i == 22) {
+        
+        c = c(c,r)  # if it gets to the end and there are no valid values, append to vector
+      }
+    }
+  } 
+  rm(data)
+  return(c)
+}
+
+rows_to_ditch = trimByStage(dge_counts)
+fail_counts = 100*(length(rows_to_ditch)/nrow(dge_counts$counts))
+ditch = dge_counts$counts[rows_to_ditch,] # table to throw away
+
+keep = !(rownames(dge_counts$counts) %in% rownames(ditch))
+
+dge_counts <- dge_counts[keep, , keep.lib.sizes = FALSE] 
+
+rm(keep,ditch)
+
+```
+After trimming, the counts table has `r nrow(dge_counts)` genes. It has lost  `r length(rows_to_ditch)` genes (`r fail_counts`% from previous total). So we can see that the first filter takes care of most genes.
+
+Now I will 1) keep only lincRNA and protein coding genes, and 2) keep only genes in autosomes.
+
+``` {r even more trimming, echo=TRUE}
+#remove genes that are not annotated as lincRNA or protein_coding
+before = nrow(dge_counts)
+dge_counts <- dge_counts[which(dge_counts$genes$gene_biotype == "protein_coding" | dge_counts$genes$gene_biotype == "lincRNA"),]
+
+
+gene_lost_step_1_counts=before-nrow(dge_counts)
+before=nrow(dge_counts)
+
+# use only autosomal genes
+chr <- c(1:22)
+dge_counts <- dge_counts[which(dge_counts$genes$chromosome_name %in% chr),]
+gene_lost_step_2_counts=before-nrow(dge_counts)
+
+
+```
+The count table finally has `r nrow(dge_counts)` genes: it lost `r gene_lost_step_1_counts` genes on the first trim of this step, and `r gene_lost_step_2_counts` genes on the second. 
+
+The library sizes for the count tables are:
+
+``` {r library counts, echo=TRUE}
+kable(dge_counts$samples[,-3])
+```
+
+We can then save the dge object of the count table:
+
+
+``` {r saving counts, echo=TRUE}
+
+save(dge_counts, file = "dge_counts.xz" , compress="xz")
+```
+
+
