@@ -31,6 +31,9 @@ library(pander)  #more tables
 library(readr) # fast reading of large files
 source("functions.R")
 
+## create folder for results under the current directory
+dir.create(file.path(getwd(), "differential_expression_results"))
+
 ##### load dge object  
 
 load(file = "/Users/Marta/Documents/WTCHG/DPhil/Data/Diff_v2/session_objects/dge_cc.xz",verbose = TRUE)  #loading the dge object for conservative counts
@@ -185,7 +188,7 @@ alltable <- topTable(fit2, sort = "F", number = nrow(dge_cc$counts))
 
 
 
-write.csv(alltable,quote = F,row.names = F,file = "all_diff_expression_results.csv")
+write.csv(alltable,quote = F,row.names = F,file = "./differential_expression_results/all_diff_expression_results.csv")
 
 #get max conditions per gene
 maxVals <- apply(alltable,1,function(x) which.max(x[5:11]))
@@ -245,7 +248,7 @@ DE_sig_stage[["EN7"]] <- sig_EN7_stage
 for (i in names(DE_sig_stage)) {
   
   DE_sig_stage[[i]] = DE_sig_stage[[i]][which(DE_sig_stage[[i]][[5]] > 1),]
-  write.csv(DE_sig_stage[[i]],quote = F,row.names = F,file = paste(currentDate,"_sig_",i,"_diff_expression_maxvals_logFC1.csv",sep = ""))
+  write.csv(DE_sig_stage[[i]],quote = F,row.names = F,file = paste("./differential_expression_results/",currentDate,"_sig_",i,"_diff_expression_maxvals_logFC1.csv",sep = ""))
 }
   
 ```
