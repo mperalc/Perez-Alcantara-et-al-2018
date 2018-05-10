@@ -1,6 +1,6 @@
 # QC and PCA RNA-seq data from various datasets
 
-# This script creates Figure 1
+# This script creates Figure 1 and ESM Figure 3
 
 
 currentDate <- Sys.Date() # to save date in name of output files
@@ -76,7 +76,7 @@ counts_new = orderColsByStages(counts_new) # order
 colnames(counts_new) = paste( rep(stage,each = 3),rep(donors,8),sep = "_" )  # rename columns
 
 # old iPSC data Islets 2016
-#75 bp read
+# They had adapters of different length, so the reads have been trimmed to same length than new data
 counts_old = read.table("counts_old_trim75bp.tsv",header = T,check.names = F,row.names = 1)
 
 counts_old <- counts_old[,13:ncol(counts_old)]
@@ -87,10 +87,9 @@ colnames(counts_old) = paste(rep(old_stages,2),rep(old_donors,each = 6),sep = "_
 
 counts_old = orderColsByStages(counts_old,stage = old_stages)
 
-
 # Xie 2013
 
-Xiecounts <- read.table("/Users/marta/Documents/WTCHG/DPhil/Data/Reference/Xie_2013_and_Nica/201215_stembancc.xie.nica.gene.counts",
+Xiecounts <- read.table("Xie_gene_counts.tsv",
                         header = T, check.names = F,row.names = 1)
 
 #cut the version number of the Ensembl IDs
@@ -104,11 +103,8 @@ rownames(all_ensembl_info) <- all_ensembl_info$ensembl_gene_id
 #check the geneID still exists in Ensembl
 Xiecounts <- Xiecounts[all_ensembl_info$ensembl_gene_id,]
 
-# remove unwanted samples:
 
-Xiecounts = Xiecounts[,c(1,2,26:73)]
-
-
+# samples in order
 Xie <- c("DP1_ES_1","DP1_DE_1","DP1_GT_1","DP1_PF_1","DP1_PE_1",
          "DP1_ES_2","DP1_DE_2","DP1_GT_2","DP1_PF_2","DP1_PE_2",
          "DP3_ES","DP3_DE","DP3_GT","DP3_PF","DP3_PE",
@@ -212,10 +208,76 @@ plotPcaDropExp = function(x, s = samples, st = stages){ # color: stage # shape: 
   return(p)
 }
 
-tiff("new_diff_vs_selected_old_75bp_Xie_commongenes_PC1and2_batchcorrected_forDiabetologia_reduced.tiff", type = "cairo", antialias = "default",
+tiff("Figure_1.tiff", type = "cairo", antialias = "default",
      width = 10,height = 8,units = "in",res = 600,pointsize = 24,compression = "lzw")
  
 p5_corrected_reduced = plotPcaDropExp(batch_corrected) 
  
 dev.off()
 
+# same plot with all samples for the three experiments
+# this creates ESM figure 3
+
+plotPca = function(x, s = samples, st = stages){ # color: stage # shape: experiment -- drop samples
+  pca1 <- prcomp(t(x), retx = TRUE)
+  
+  percentVar <- (pca1$sdev)^2 / sum(pca1$sdev^2)
+  percentVar <- round(100 * percentVar)
+  pcs <- as.data.frame(pca1$x)
+  pcs <- cbind(pcs,Samples = samples,Stages = stages,Experiment = c(rep("Current",24),rep("Previous",12),rep("Xie",25)))
+  levels(pcs$Stages) <- c(levels(pcs$Stages), c("EN","BLC","GT","PF","Late PE","Matured in vivo","Polyhormonal"))  # change name of stages, first increase levels of factor
+  pcs[which(pcs$Stages == "ENstage6"),"Stages"] <- "EN"
+  pcs[which(pcs$Stages == "ENstage7"),"Stages"] <- "BLC"
+  pcs[which(pcs$Stages == "PGT"),"Stages"] <- "GT"
+  pcs[which(pcs$Stages == "PFG"),"Stages"] <- "PF"
+  pcs[which(pcs$Stages == "late_PE"),"Stages"] <- "Late PE"
+  pcs[which(pcs$Stages == "matured_in_vivo"),"Stages"] <- "Matured in vivo"
+  pcs[which(pcs$Stages == "polyhormonal"),"Stages"] <- "Polyhormonal"
+  
+  
+  pcs <- droplevels(pcs)  # drop unused levels (old names)
+  
+  pcs$Stages <- ordered(pcs$Stages, levels = c("iPSC", "ES","DE", "GT", "PF", "PE", "Late PE","EP",
+                                               "EN","Polyhormonal", "BLC","Matured in vivo") ) # order levels, for colours
+  
+  
+  diaPalette <- c("#000000","#000000","#CADAE8", "#7883BA", "#755A91", "#CC85B1", "#A832D7",  "#F4B8B0",
+                  "#96665A","#C85820", "#96165A","#6DA567")  # Diabetologia palette
+  
+  p <- ggplot(pcs,aes(x = PC1,y = PC2, color = Stages, shape = Experiment)) +
+    geom_point(size = 5, aes(fill = Stages),
+               #alpha=as.character(Experiment)),
+               stroke = 1) +
+    geom_point(size = 2.5,stroke = 1.5) +
+    scale_fill_manual(values = c("Optimised" = diaPalette, "Previous" = diaPalette,"Xie" = "#FFFFFF")) +
+    scale_colour_manual(values = diaPalette) +
+    scale_shape_manual(values = c(16,17,22)) +
+    xlab(paste0( "PC1: " ,percentVar[ 1 ],"% variance")) +
+    ylab(paste0( "PC2: ",percentVar[ 2 ],"% variance" ))
+  
+  
+  p <- p + theme(   panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+                    panel.background = element_blank(),
+                    panel.border = element_blank(),
+                    legend.key = element_blank(),
+                    axis.title.y = element_text(  angle = 90, size = 24, vjust = 0.2),
+                    axis.title.x = element_text(  size = 24, vjust = 0),
+                    axis.text.x = element_text(  colour = "black",  size = 24, vjust = 0.2, hjust = 1 ),
+                    axis.text.y = element_text(  colour = "black",size = 24),
+                    axis.ticks = element_line(colour = "black",size = 0.75),
+                    axis.line = element_line(colour = "black",size = 0.30),
+                    legend.text = element_text(  colour = "black",size = 24),
+                    legend.title = element_text(  colour = "black",size = 24))
+  
+  
+  plot(p)
+  return(p)
+}
+
+
+tiff("ESM_Figure_3.tiff", type = "cairo", antialias = "default",
+     width = 10,height = 8,units = "in",res = 600,pointsize = 24,compression = "lzw")
+
+p5_corrected = plotPca(batch_corrected) 
+
+dev.off()
