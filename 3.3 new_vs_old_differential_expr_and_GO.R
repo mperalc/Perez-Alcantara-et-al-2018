@@ -13,6 +13,8 @@ library(biomaRt)
 library(pheatmap)
 library(RColorBrewer)
 library(edgeR)
+library(GOstats)
+library(qvalue)
 source("functions.R")
 
 ## create folder for results under the current directory
@@ -224,46 +226,32 @@ for (s in old_stages) {
     ),
     row.names = F
   )
-  
+  #  nrow-ing each table from the list shows a slight mistake in the paper: in the last stage there are 2094 diff expressed genes, 1 less than 
+  # stated in the paper
 }
 
-# how many logFC are negative? (old exp has increased expression compared to new stage)
-is_negative <- list()
-for (s in old_stages) {
-  is_negative[[s]] = table(diff_exp_allstages[[s]]$logFC < 0)
-}
-
-
-
-
-############### GO analysis
-
-library(biomaRt)
-library(GOstats)
-library(qvalue)
-library(org.Hs.eg.db)
-
-currentDate <- Sys.Date() # to save date in name of output files
+############### GO analysis ###############################
 
 stage = c("iPSC", "DE", "PGT", "PFG", "PE", "ENstage6")
 
+# background list
+# load(
+#   "dge_old_and_new_filtered_75bp.xz"
+# )  
 
-# just data used for the Differential expression analysis
-
-load(
-  "/Users/Marta/Documents/WTCHG/DPhil/Data/Diff_v2/session_objects/dge_old_and_new_filtered_75bp.xz"
-)  # 15464 genes and lincRNA
-
+# test lists
 sig_stages = list()
 
 for (s in stage) {
   # read in DEA data for each stage
   sig_stages[[s]] <-
     read.csv(
-      file = paste(
-        "/Users/Marta/Documents/WTCHG/DPhil/Data/Results/Diff_v2/Voom/comparison_old_and_new_study/old_with_75bp_reads/2017-03-09_diff_exp_old_vs_new_protocol_",
+      file =  paste(
+        "./new_vs_old_differential_expression_results/",
+        currentDate,
+        "_diff_exp_new_vs_old_protocol_",
         s,
-        "_stage_1percent_adjpval_1cpm_old_75bp_reads.csv",
+        "_stage.csv",
         sep = ""
       ),
       header = T
@@ -273,220 +261,172 @@ for (s in stage) {
                                             F), ] # order by adjusted p.value
 }
 
-
-#perform GO enrichment using GOstats
-
-ensembl <- useMart("ENSEMBL_MART_ENSEMBL",dataset="hsapiens_gene_ensembl",host="www.ensembl.org")
-
 ##get the entrez IDs for the genes of interest. Takes Ensembl gene ids from my data
-all_ensembl_to_entrez <- getBM(attributes=c('ensembl_gene_id', 'entrezgene'), 
-                               filters = 'ensembl_gene_id', 
-                               values = rownames(filtered_combined_commongenes$genes), mart = ensembl)  # all genes from dge object
 
-sig_genes <- list()
 
-for(i in stage){
-  
-  sig_genes[[i]] <- getBM(attributes=c('ensembl_gene_id', 'entrezgene'), 
-                          filters = 'ensembl_gene_id', 
-                          values = sig_stages[[i]]$ensembl_gene_id, mart = ensembl)
-}
-
-# results: data frame with ensembl_gene_id and entrez gene id
+ensembl38 = useMart(
+  biomart = "ENSEMBL_MART_ENSEMBL",
+  host = "mar2017.archive.ensembl.org",
+  path = "/biomart/martservice" ,
+  dataset = "hsapiens_gene_ensembl"
+)
+all_ensembl_to_entrez = getBM(
+    attributes = c('ensembl_gene_id', 'entrezgene'),
+    filters = 'ensembl_gene_id',
+    values = rownames(filtered_combined_commongenes$genes),
+    mart = ensembl38
+  )  # all genes from dge object
 
 
 entrez_object <- org.Hs.egGO
 mapped_genes <- mappedkeys(entrez_object) # all entrez keys that have GO id
 all_with_go <- unique(intersect(all_ensembl_to_entrez$entrezgene,mapped_genes)) # all entrez ids that have GO id from dge object
 
-# now for every sig DEA results
-sig_genes_with_go <- list()
 
-for(i in stage){
-  sig_genes_with_go[[i]]=unique(intersect(sig_genes[[i]]$entrezgene,mapped_genes))
-}
-
-GO_list <- list()
-
-for (i in stage){
-  params <- new('GOHyperGParams',
-                geneIds=sig_genes_with_go[[i]],  # list of genes I'm testing
-                universeGeneIds=all_with_go, # list of genes I used in my DE analysis (all my genes with RNA-seq data)
-                ontology='BP',  # biological process
-                pvalueCutoff=1,  # p value=1 to be able to calculate FDR adjusted p values later (q-values)
-                conditional=T,
-                testDirection='over',
-                annotation="org.Hs.eg.db"
-  )
-  hgOver <- hyperGTest(params)
-  hgOver  
-  
-  result <- summary(hgOver)
-  
-  
-  result <- result[which(result$Size > 1 & result$Count > 1),] 
-  
-  # # ## calculate adjusted pvalues (BH)
-  result <- cbind(result,adjust_pval=p.adjust(result$Pvalue,"BH"))
-  result <- result[which(result$adjust_pval<0.05),] # saving GO terms with significant adjusted p-values
-  
-  GO_list[[i]]<- result
-  
-}
-
-for(i in stage){
-  # change name according to method used to calculate adjusted p-vals and logFC>1 or 0
-  write.csv(file=paste("/Users/Marta/Documents/WTCHG/DPhil/Data/Results/Diff_v2/Voom/comparison_old_and_new_study/old_with_75bp_reads/",
-                       currentDate,"_GOstats_GO_BP_",i,"old_vs_new_sig_result_BH_adjustment_logFC1.csv",sep=""),GO_list[[i]],row.names=F)
-}
-
-##########################################
-# higher in old experiment:
+## for genes with higher diff expr in old experiment:
 
 sig_stages_neg <- list()
-for(s in stage){
-  sig_stages_neg[[s]]<- sig_stages[[s]][which(sig_stages[[s]]$logFC<1),]
+for (s in stage) {
+  sig_stages_neg[[s]] <- sig_stages[[s]][which(sig_stages[[s]]$logFC < 1), ]
 }
-
-
-#perform GO enrichment using GOstats
-
-ensembl <- useMart("ENSEMBL_MART_ENSEMBL",dataset="hsapiens_gene_ensembl",host="www.ensembl.org")
-
-##get the entrez IDs for the genes of interest. Takes Ensembl gene ids from my data
-all_ensembl_to_entrez <- getBM(attributes=c('ensembl_gene_id', 'entrezgene'), 
-                               filters = 'ensembl_gene_id', 
-                               values = rownames(filtered_combined_commongenes$genes), mart = ensembl)  # all genes from dge object
 
 sig_genes <- list()
 
-for(i in stage){
-  
-  sig_genes[[i]] <- getBM(attributes=c('ensembl_gene_id', 'entrezgene'), 
-                          filters = 'ensembl_gene_id', 
-                          values = sig_stages_neg[[i]]$ensembl_gene_id, mart = ensembl)
+for (i in stage) {
+  sig_genes[[i]] = getBM(
+      attributes = c('ensembl_gene_id', 'entrezgene'),
+      filters = 'ensembl_gene_id',
+      values = sig_stages_neg[[i]]$ensembl_gene_id,
+      mart = ensembl
+    )
 }
 
-# results: data frame with ensembl_gene_id and entrez gene id
-
-
-entrez_object <- org.Hs.egGO
-mapped_genes <- mappedkeys(entrez_object) # all entrez keys that have GO id
-all_with_go <- unique(intersect(all_ensembl_to_entrez$entrezgene,mapped_genes)) # all entrez ids that have GO id from dge object
-
-# now for every sig DEA results
-sig_genes_with_go <- list()
-
-for(i in stage){
-  sig_genes_with_go[[i]]=unique(intersect(sig_genes[[i]]$entrezgene,mapped_genes))
+sig_genes_with_go = list()
+for (i in stage) {
+  sig_genes_with_go[[i]] = unique(intersect(sig_genes[[i]]$entrezgene, mapped_genes))
 }
 
-GO_list <- list()
+#perform GO enrichment using GOstats
 
-for (i in stage){
-  params <- new('GOHyperGParams',
-                geneIds=sig_genes_with_go[[i]],  # list of genes I'm testing
-                universeGeneIds=all_with_go, # list of genes I used in my DE analysis (all my genes with RNA-seq data)
-                ontology='BP',  # biological process
-                pvalueCutoff=1,  # p value=1 to be able to calculate FDR adjusted p values later (q-values)
-                conditional=T,
-                testDirection='over',
-                annotation="org.Hs.eg.db"
+
+GO_list = list()
+
+for (i in stage) {
+  params = new(
+    'GOHyperGParams',
+    geneIds = sig_genes_with_go[[i]],
+    # list of genes I'm testing
+    universeGeneIds = all_with_go,
+    # list of genes I used in my DE analysis (all my genes with RNA-seq data)
+    ontology = 'BP',
+    # biological process
+    pvalueCutoff = 1,
+    # p value=1 to be able to calculate FDR adjusted p values later (q-values)
+    conditional = T,
+    testDirection = 'over',
+    annotation = "org.Hs.eg.db"
   )
-  hgOver <- hyperGTest(params)
-  hgOver  
+  hgOver = hyperGTest(params)
+  hgOver
   
-  result <- summary(hgOver)
-  
-  
+  result = summary(hgOver)
   result <- result[which(result$Size > 1 & result$Count > 1),] 
   
+  
   # # ## calculate adjusted pvalues (BH)
-  result <- cbind(result,adjust_pval=p.adjust(result$Pvalue,"BH"))
-  result <- result[which(result$adjust_pval<0.05),] # saving GO terms with significant adjusted p-values
+  result <- cbind(result, adjust_pval = p.adjust(result$Pvalue, "BH"))
+  result <- result[which(result$adjust_pval < 0.05), ] # saving GO terms with significant adjusted p-values
   
-  GO_list[[i]]<- result
+  GO_list[[i]] <- result
   
 }
 
-for(i in stage){
+for (i in stage) {
   # change name according to method used to calculate adjusted p-vals and logFC>1 or 0
-  write.csv(file=paste("/Users/Marta/Documents/WTCHG/DPhil/Data/Results/Diff_v2/Voom/comparison_old_and_new_study/old_with_75bp_reads/",
-                       currentDate,"_GOstats_GO_BP_",i,"old_vs_new_sig_result_BH_adjustment_expr_higherinold.csv",sep=""),GO_list[[i]],row.names=F)
+  write.csv(
+    file = paste(
+      "./new_vs_old_differential_expression_results/",
+      currentDate,
+      "_GOstats_GO_BP_",
+      i,
+      "expr_higherinold.csv",
+      sep = ""
+    ),
+    GO_list[[i]],
+    row.names = F
+  )
 }
 
-##########################################
 # higher in new:
 
-
 sig_stages_pos <- list()
-for(s in stage){
-  sig_stages_pos[[s]]<- sig_stages[[s]][which(sig_stages[[s]]$logFC>1),]
+for (s in stage) {
+  sig_stages_pos[[s]] <-
+    sig_stages[[s]][which(sig_stages[[s]]$logFC > 1), ]
 }
-
-
-#perform GO enrichment using GOstats
-
-ensembl <- useMart("ENSEMBL_MART_ENSEMBL",dataset="hsapiens_gene_ensembl",host="www.ensembl.org")
-
-##get the entrez IDs for the genes of interest. Takes Ensembl gene ids from my data
-all_ensembl_to_entrez <- getBM(attributes=c('ensembl_gene_id', 'entrezgene'), 
-                               filters = 'ensembl_gene_id', 
-                               values = rownames(filtered_combined_commongenes$genes), mart = ensembl)  # all genes from dge object
 
 sig_genes <- list()
-
-for(i in stage){
-  
-  sig_genes[[i]] <- getBM(attributes=c('ensembl_gene_id', 'entrezgene'), 
-                          filters = 'ensembl_gene_id', 
-                          values = sig_stages_pos[[i]]$ensembl_gene_id, mart = ensembl)
+for (i in stage) {
+  sig_genes[[i]] <-
+    getBM(
+      attributes = c('ensembl_gene_id', 'entrezgene'),
+      filters = 'ensembl_gene_id',
+      values = sig_stages_pos[[i]]$ensembl_gene_id,
+      mart = ensembl38
+    )
 }
 
-# results: data frame with ensembl_gene_id and entrez gene id
-
-
-entrez_object <- org.Hs.egGO
-mapped_genes <- mappedkeys(entrez_object) # all entrez keys that have GO id
-all_with_go <- unique(intersect(all_ensembl_to_entrez$entrezgene,mapped_genes)) # all entrez ids that have GO id from dge object
-
-# now for every sig DEA results
 sig_genes_with_go <- list()
-
-for(i in stage){
-  sig_genes_with_go[[i]]=unique(intersect(sig_genes[[i]]$entrezgene,mapped_genes))
+for (i in stage) {
+  sig_genes_with_go[[i]] = unique(intersect(sig_genes[[i]]$entrezgene, mapped_genes))
 }
 
 GO_list <- list()
-
-for (i in stage){
-  params <- new('GOHyperGParams',
-                geneIds=sig_genes_with_go[[i]],  # list of genes I'm testing
-                universeGeneIds=all_with_go, # list of genes I used in my DE analysis (all my genes with RNA-seq data)
-                ontology='BP',  # biological process
-                pvalueCutoff=1,  # p value=1 to be able to calculate FDR adjusted p values later (q-values)
-                conditional=T,
-                testDirection='over',
-                annotation="org.Hs.eg.db"
+for (i in stage) {
+  params <- new(
+    'GOHyperGParams',
+    geneIds = sig_genes_with_go[[i]],
+    # list of genes I'm testing
+    universeGeneIds = all_with_go,
+    # list of genes I used in my DE analysis (all my genes with RNA-seq data)
+    ontology = 'BP',
+    # biological process
+    pvalueCutoff = 1,
+    # p value=1 to be able to calculate FDR adjusted p values later (q-values)
+    conditional = T,
+    testDirection = 'over',
+    annotation = "org.Hs.eg.db"
   )
   hgOver <- hyperGTest(params)
-  hgOver  
+  hgOver
   
   result <- summary(hgOver)
   
   
-  result <- result[which(result$Size > 1 & result$Count > 1),] 
+  result <- result[which(result$Size > 1 & result$Count > 1), ]
   
   # # ## calculate adjusted pvalues (BH)
-  result <- cbind(result,adjust_pval=p.adjust(result$Pvalue,"BH"))
-  result <- result[which(result$adjust_pval<0.05),] # saving GO terms with significant adjusted p-values
+  result <- cbind(result, adjust_pval = p.adjust(result$Pvalue, "BH"))
+  result <-
+    result[which(result$adjust_pval < 0.05), ] # saving GO terms with significant adjusted p-values
   
-  GO_list[[i]]<- result
+  GO_list[[i]] <- result
   
 }
 
-for(i in stage){
+
+for (i in stage) {
   # change name according to method used to calculate adjusted p-vals and logFC>1 or 0
-  write.csv(file=paste("/Users/Marta/Documents/WTCHG/DPhil/Data/Results/Diff_v2/Voom/comparison_old_and_new_study/old_with_75bp_reads/",
-                       currentDate,"_GOstats_GO_BP_",i,"old_vs_new_sig_result_BH_adjustment_expr_higherinnew.csv",sep=""),GO_list[[i]],row.names=F)
+  write.csv(
+    file = paste(
+      "./new_vs_old_differential_expression_results/",
+      currentDate,
+      "_GOstats_GO_BP_",
+      i,
+      "expr_higherinnew.csv",
+      sep = ""
+    ),
+    GO_list[[i]],
+    row.names = F
+  )
 }
