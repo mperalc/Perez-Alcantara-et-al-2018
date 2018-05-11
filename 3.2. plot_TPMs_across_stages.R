@@ -1,6 +1,6 @@
 #
   #  PLOT EXPRESSION OF KEY GENES (IN TPM)
-
+# This script creates ESM Figure 2
 #   It needs data from TPM normalised counts - one can get that from the raw counts with featureCounts
 
 # Load necessary libraries
