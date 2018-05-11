@@ -36,7 +36,7 @@ dir.create(file.path(getwd(), "differential_expression_results"))
 
 ##### load dge object  
 
-load(file = "/Users/Marta/Documents/WTCHG/DPhil/Data/Diff_v2/session_objects/dge_cc.xz",verbose = TRUE)  #loading the dge object for conservative counts
+load(file = "dge_counts.xz",verbose = TRUE)  #loading the dge object for conservative counts
 
 donors = c("Ad2.1","Ad3.1","Neo1.1")  # data comes from three donors
 stage = c("iPSC", "DE", "PGT", "PFG", "PE", "EP","ENstage6", "ENstage7") # 8 stages
